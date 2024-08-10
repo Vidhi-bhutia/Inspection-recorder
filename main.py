@@ -1,15 +1,15 @@
 import streamlit as st
 import speech_recognition as sr
-import openpyxl
-from openpyxl import load_workbook, Workbook
 from datetime import datetime
 import os
 from gtts import gTTS
 import tempfile
 import pygame
+import pymongo
+from pymongo import MongoClient
+from io import BytesIO
 from reportlab.lib.pagesizes import letter
 from reportlab.pdfgen import canvas
-from io import BytesIO
 
 # Initialize the speech recognition engine
 recognizer = sr.Recognizer()
@@ -49,138 +49,177 @@ def record_speech(prompt):
             st.write(f"Listening timed out. Please try again.")
             return "Timeout"
 
-# Define file name
-file_name = "Truck_Inspection_Records.xlsx"
-
-# Check if file exists
-if os.path.exists(file_name):
-    wb = load_workbook(file_name)
-    ws = wb.active
-else:
-    wb = Workbook()
-    ws = wb.active
-    ws.title = "Truck Inspections"
-
-    headers = [
-        "Inspection ID", "Truck Serial Number", "Truck Model", "Inspector Name",
-        "Inspection Employee ID", "Date & Time of Inspection", "Location of Inspection",
-        "Geo Coordinates of Inspection", "Service Meter Hours", "Inspector Signature",
-        "Customer Name / Company Name", "CAT Customer ID",
-        "Tire Pressure for Left Front", "Tire Pressure for Right Front",
-        "Tire Condition for Left Front", "Tire Condition for Right Front",
-        "Tire Pressure for Left Rear", "Tire Pressure for Right Rear",
-        "Tire Condition for Left Rear", "Tire Condition for Right Rear",
-        "Overall Tire Summary", "Tire Images",
-        "Battery Make", "Battery replacement date", "Battery Voltage",
-        "Battery Water level", "Condition of Battery", "Any Leak / Rust in battery",
-        "Battery overall Summary", "Battery Images",
-        "Exterior Rust/Dent/Damage", "Oil leak in Suspension", "Exterior Summary", "Exterior Images",
-        "Brake Fluid level", "Brake Condition for Front", "Brake Condition for Rear",
-        "Emergency Brake", "Brake Overall Summary", "Brake Images",
-        "Engine Rust/Dents/Damage", "Engine Oil Condition", "Engine Oil Color",
-        "Brake Fluid Condition", "Brake Fluid Color", "Any oil leak in Engine",
-        "Engine Overall Summary", "Engine Images",
-        "Voice of Customer", "Customer Feedback Images"
-    ]
-
-    ws.append(headers)
+# MongoDB setup
+client = MongoClient('mongodb://localhost:27017/')  # Replace with your MongoDB URI
+db = client['truck_inspections']
+collection = db['inspections']
 
 # Streamlit app UI
 st.title("Truck Inspection Data Collection")
 
-# Automatically generate an ID
-inspection_data = []
-inspection_data.append(str(len(ws['A']) + 1))  # Inspection ID is auto-incremented
+# State variables
+if 'inspection_data' not in st.session_state:
+    st.session_state.inspection_data = {}
 
-# Collecting inputs for each component
-questions = {
-    "Truck Serial Number": "Please provide the Truck Serial Number.",
-    "Truck Model": "Please provide the Truck Model.",
-    "Inspector Name": "Please provide your name.",
-    "Inspection Employee ID": "Please provide your Employee ID.",
-    "Location of Inspection": "Please provide the Location of Inspection.",
-    "Geo Coordinates of Inspection": "Please provide the Geo Coordinates of Inspection if available.",
-    "Service Meter Hours": "Please provide the Service Meter Hours.",
-    "Inspector Signature": "Please provide your Signature verbally.",
-    "Customer Name / Company Name": "Please provide the Customer Name or Company Name.",
-    "CAT Customer ID": "Please provide the CAT Customer ID.",
-    "Tire Pressure for Left Front": "Please provide the Tire Pressure for Left Front.",
-    "Tire Pressure for Right Front": "Please provide the Tire Pressure for Right Front.",
-    "Tire Condition for Left Front": "Please describe the Tire Condition for Left Front.",
-    "Tire Condition for Right Front": "Please describe the Tire Condition for Right Front.",
-    "Tire Pressure for Left Rear": "Please provide the Tire Pressure for Left Rear.",
-    "Tire Pressure for Right Rear": "Please provide the Tire Pressure for Right Rear.",
-    "Tire Condition for Left Rear": "Please describe the Tire Condition for Left Rear.",
-    "Tire Condition for Right Rear": "Please describe the Tire Condition for Right Rear.",
-    "Overall Tire Summary": "Please provide an Overall Tire Summary.",
-    "Battery Make": "Please provide the Battery Make.",
-    "Battery replacement date": "Please provide the Battery replacement date.",
-    "Battery Voltage": "Please provide the Battery Voltage.",
-    "Battery Water level": "Please describe the Battery Water level.",
-    "Condition of Battery": "Please describe the Condition of Battery.",
-    "Any Leak / Rust in battery": "Is there any Leak or Rust in the battery? (Yes/No)",
-    "Battery overall Summary": "Please provide an Overall Battery Summary.",
-    "Exterior Rust/Dent/Damage": "Is there any Rust, Dent or Damage to the Exterior? (Yes/No)",
-    "Oil leak in Suspension": "Is there any Oil leak in the Suspension? (Yes/No)",
-    "Exterior Summary": "Please provide an Overall Exterior Summary.",
-    "Brake Fluid level": "Please describe the Brake Fluid level.",
-    "Brake Condition for Front": "Please describe the Brake Condition for Front.",
-    "Brake Condition for Rear": "Please describe the Brake Condition for Rear.",
-    "Emergency Brake": "Please describe the Emergency Brake condition.",
-    "Brake Overall Summary": "Please provide an Overall Brake Summary.",
-    "Engine Rust/Dents/Damage": "Is there any Rust, Dents or Damage in the Engine? (Yes/No)",
-    "Engine Oil Condition": "Please describe the Engine Oil Condition.",
-    "Engine Oil Color": "Please describe the Engine Oil Color.",
-    "Brake Fluid Condition": "Please describe the Brake Fluid Condition.",
-    "Brake Fluid Color": "Please describe the Brake Fluid Color.",
-    "Any oil leak in Engine": "Is there any oil leak in the Engine? (Yes/No)",
-    "Engine Overall Summary": "Please provide an Overall Engine Summary.",
-    "Voice of Customer": "Please provide any feedback from the Customer."
-}
+if st.button("Start Data Collection"):
+    st.session_state.inspection_data = {
+        "Inspection ID": str(collection.count_documents({}) + 1),  # Auto-incremented Inspection ID
+        "Date & Time of Inspection": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "Truck Serial Number": "",
+        "Truck Model": "",
+        "Inspector Name": "",
+        "Inspection Employee ID": "",
+        "Tires": {},
+        "Battery": {},
+        "Exterior": {},
+        "Brakes": {},
+        "Engine": {},
+        "Voice of Customer": {}
+    }
 
-# Insert the date and time at the correct position
-date_time_of_inspection = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-inspection_data.insert(5, date_time_of_inspection)
+    # Collecting inputs for each component
+    questions = {
+        "Truck Serial Number": "Please provide the Truck Serial Number.",
+        "Truck Model": "Please provide the Truck Model.",
+        "Inspector Name": "Please provide your name.",
+        "Inspection Employee ID": "Please provide your Employee ID.",
+        "Location of Inspection": "Please provide the Location of Inspection.",
+        "Geo Coordinates of Inspection": "Please provide the Geo Coordinates of Inspection if available.",
+        "Service Meter Hours": "Please provide the Service Meter Hours.",
+        "Inspector Signature": "Please provide your Signature verbally.",
+        "Customer Name / Company Name": "Please provide the Customer Name or Company Name.",
+        "CAT Customer ID": "Please provide the CAT Customer ID."
 
-# Ask questions and collect responses
-for key, question in questions.items():
-    while True:
-        response = record_speech(question)
-        if response not in ["Unknown", "Error", "Timeout"]:
-            inspection_data.append(response)
-            break
-        else:
-            speak(f"Sorry, I couldn't get you. Can you please repeat the {key.lower()}?")
+    }
 
-# Save data to Excel and generate PDF when the form is submitted
+    for key, question in questions.items():
+        while True:
+            response = record_speech(question)
+            if response not in ["Unknown", "Error", "Timeout"]:
+                st.session_state.inspection_data[key] = response
+                break
+            else:
+                speak(f"Sorry, I couldn't get you. Can you please repeat the {key.lower()}?")
+
+    # Collecting detailed inspection data
+    detailed_questions = {
+        "Tires": {
+            "Tire Pressure for Left Front": "Tire Pressure for Left Front:",
+            "Tire Pressure for Right Front": "Tire Pressure for Right Front:",
+            "Tire Condition for Left Front": "Tire Condition for Left Front (Good, Ok, Needs Replacement):",
+            "Tire Condition for Right Front": "Tire Condition for Right Front (Good, Ok, Needs Replacement):",
+            "Tire Pressure for Left Rear": "Tire Pressure for Left Rear:",
+            "Tire Pressure for Right Rear": "Tire Pressure for Right Rear:",
+            "Tire Condition for Left Rear": "Tire Condition for Left Rear (Good, Ok, Needs Replacement):",
+            "Tire Condition for Right Rear": "Tire Condition for Right Rear (Good, Ok, Needs Replacement):",
+            "Overall Tire Summary": "Overall Tire Summary:",
+        },
+         "Battery": {
+            "Battery Make": "Battery Make:",
+            "Battery replacement date": "Battery replacement date:",
+            "Battery Voltage": "Battery Voltage:",
+            "Battery Water level": "Battery Water level (Good, Ok, Low):",
+            "Condition of Battery": "Condition of Battery (Any damage) Y/N:",
+            "Any Leak / Rust in battery": "Any Leak / Rust in battery (Y / N):",
+            "Battery overall Summary": "Battery overall Summary:",
+        },
+        "Exterior": {
+            "Rust, Dent or Damage to Exterior": "Rust, Dent or Damage to Exterior (Y/N):",
+            "Oil leak in Suspension": "Oil leak in Suspension (Y/N):",
+            "Overall Summary": "Overall Summary:",
+        },
+        "Brakes": {
+            "Brake Fluid level": "Brake Fluid level (Good, Ok, Low):",
+            "Brake Condition for Front": "Brake Condition for Front (Good, Ok, Needs Replacement):",
+            "Brake Condition for Rear": "Brake Condition for Rear (Good, Ok, Needs Replacement):",
+            "Emergency Brake": "Emergency Brake (Good, Ok, Low):",
+            "Brake Overall Summary": "Brake Overall Summary:",
+        },
+        "Engine": {
+            "Rust, Dents or Damage in Engine": "Rust, Dents or Damage in Engine (Y/N):",
+            "Engine Oil Condition": "Engine Oil Condition (Good / Bad):",
+            "Engine Oil Color": "Engine Oil Color:",
+            "Brake Fluid Condition": "Brake Fluid Condition (Good / Bad):",
+            "Brake Fluid Color": "Brake Fluid Color:",
+            "Any oil leak in Engine": "Any oil leak in Engine (Y/N):",
+            "Overall Summary": "Overall Summary:",
+        },
+        "Voice of Customer": {
+            "Any feedback from Customer": "Any feedback from Customer:",
+        }
+        
+    }
+
+    for section, questions in detailed_questions.items():
+        section_data = {}
+        for key, question in questions.items():
+            while True:
+                response = record_speech(question)
+                if response not in ["Unknown", "Error", "Timeout"]:
+                    section_data[key] = response
+                    break
+                else:
+                    speak(f"Sorry, I couldn't get you. Can you please repeat the {key.lower()}?")
+        st.session_state.inspection_data[section] = section_data
+
 if st.button("Save Inspection Data"):
-    ws.append(inspection_data)
-    wb.save(file_name)
-    st.success(f"Inspection record saved to {file_name}.")
+    if st.session_state.inspection_data:
+        inspection_id = st.session_state.inspection_data["Inspection ID"]
 
-    # Create a PDF and provide download link
-    pdf_buffer = BytesIO()
-    c = canvas.Canvas(pdf_buffer, pagesize=letter)
-    width, height = letter
-    y_position = height - 50
+        # Check if the document with the same Inspection ID exists
+        existing_record = collection.find_one({"Inspection ID": inspection_id})
 
-    # Add title
-    c.setFont("Helvetica-Bold", 16)
-    c.drawString(50, y_position, "Truck Inspection Report")
-    y_position -= 30
+        if existing_record:
+            # Update the existing document
+            update_fields = {}
+            for key, value in st.session_state.inspection_data.items():
+                if isinstance(value, dict):
+                    for sub_key, sub_value in value.items():
+                        update_fields[f"{key}.{sub_key}"] = sub_value
+                else:
+                    update_fields[key] = value
 
-    # Add inspection data
-    c.setFont("Helvetica", 12)
-    for header, data in zip(headers, inspection_data):
-        c.drawString(50, y_position, f"{header}: {data}")
-        y_position -= 20
+            collection.update_one(
+                {"Inspection ID": inspection_id},
+                {"$set": update_fields}
+            )
+            st.success("Inspection record updated in MongoDB.")
+        else:
+            # Insert a new document
+            collection.insert_one(st.session_state.inspection_data)
+            st.success("New inspection record saved to MongoDB.")
 
-    c.save()
+        # Generate and download PDF report
+        pdf_buffer = BytesIO()
+        c = canvas.Canvas(pdf_buffer, pagesize=letter)
+        width, height = letter
+        y_position = height - 50
 
-    pdf_buffer.seek(0)
-    st.download_button(
-        label="Download PDF",
-        data=pdf_buffer,
-        file_name="Truck_Inspection_Report.pdf",
-        mime="application/pdf"
-    )
+        # Add title
+        c.setFont("Helvetica-Bold", 16)
+        c.drawString(50, y_position, "Truck Inspection Report")
+        y_position -= 30
+
+        # Add inspection data
+        c.setFont("Helvetica", 12)
+        for key, value in st.session_state.inspection_data.items():
+            if isinstance(value, dict):
+                c.drawString(50, y_position, f"{key}:")
+                y_position -= 20
+                for sub_key, sub_value in value.items():
+                    c.drawString(50, y_position, f"  {sub_key}: {sub_value}")
+                    y_position -= 20
+            else:
+                c.drawString(50, y_position, f"{key}: {value}")
+                y_position -= 20
+
+        c.save()
+        pdf_buffer.seek(0)
+        st.download_button(
+            label="Download PDF Report",
+            data=pdf_buffer,
+            file_name="truck_inspection_report.pdf",
+            mime="application/pdf"
+        )
+    else:
+        st.error("No inspection data to save.")
