@@ -1,5 +1,5 @@
 import streamlit as st
-import speech_recognition as sr
+import SpeechRecognition as sr
 import openpyxl
 from openpyxl import load_workbook, Workbook
 from datetime import datetime
